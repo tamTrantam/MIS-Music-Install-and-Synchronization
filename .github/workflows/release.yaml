@@ -1,0 +1,43 @@
+name: Build and Release MusicSyncManager
+
+on:
+  push:
+    tags:
+      - 'v*' # This triggers the build whenever you push a tag like v1.0.0
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest # Matches your .bat requirements
+
+    steps:
+    - name: Checkout Code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-style: '3.x' # Installs the latest stable Python 3 version
+        cache: 'pip'        # Caches pip dependencies to make future builds faster
+
+    - name: Run Build Script
+      run: |
+        .\build.bat
+      shell: cmd
+
+    - name: Zip the Executable
+      run: |
+        # Zips just the final .exe from the dist folder
+        Compress-Archive -Path .\dist\MusicSyncManager.exe -DestinationPath .\MusicSyncManager-Windows.zip
+      shell: powershell
+
+    - name: Create GitHub Release
+      uses: softprops/action-gh-release@v2
+      with:
+        files: .\MusicSyncManager-Windows.zip
+        body: |
+          ### Installation
+          1. Download `MusicSyncManager-Windows.zip` below.
+          2. Extract the file.
+          3. Right-click `MusicSyncManager.exe` and click **Run as Administrator** (Required for symbolic link features).
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
