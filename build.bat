@@ -31,4 +31,5 @@ python -m PyInstaller --noconfirm --windowed --onefile  --uac-admin ^
     "main.py"
 
 echo SUCCESS! Check the 'dist' folder for your independent MusicSyncManager.exe
-pause
+:: Only pause if the script was double-clicked manually, skip if run by GitHub
+if "%GITHUB_ACTIONS%"=="" pause
