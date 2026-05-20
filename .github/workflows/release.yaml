@@ -16,7 +16,7 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-style: '3.x' # Installs the latest stable Python 3 version
+        python-version: '3.x' # Installs the latest stable Python 3 version
         cache: 'pip'        # Caches pip dependencies to make future builds faster
 
     - name: Run Build Script
