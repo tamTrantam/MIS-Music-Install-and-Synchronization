@@ -198,13 +198,13 @@ class App(tk.Tk):
             raise
 
     def search_youtube(self, query, max_results=15):
-        ydl_opts = {
+        ydl_opts: dict[str, object] = {
             'quiet': True,
             'skip_download': True,
             'noplaylist': True,
             'extract_flat': True,
         }
-        with YoutubeDL(ydl_opts) as ydl:
+        with YoutubeDL(ydl_opts) as ydl:  # type: ignore[arg-type]
             data = ydl.extract_info(f'ytsearch{max_results}:{query}', download=False)
         return list(data.get('entries') or [])[:max_results]
 
@@ -288,6 +288,8 @@ class App(tk.Tk):
             print(f"Running command: {' '.join(cmd)}")
             # Use CREATE_NO_WINDOW to prevent the console from popping up in the compiled app
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            assert process.stdout is not None
+            assert process.stderr is not None
 
             self.progress_bar['value'] = 0
             self.progress_bar['maximum'] = 100
@@ -315,20 +317,7 @@ class App(tk.Tk):
             if process.returncode != 0:
                 raise subprocess.CalledProcessError(process.returncode, cmd, stderr=stderr_output)
 
-            # Find the downloaded path from the last lines of output
-            process.stdout.seek(0)
-            downloaded_path = ""
-            for line in reversed(process.stdout.readlines()):
-                line = line.strip()
-                if line and os.path.exists(line):
-                    downloaded_path = line
-                    break
-            
-            if not downloaded_path:
-                 # Fallback if path isn't found in stdout
-                possible_path = output_template.replace('%(ext)s', 'mp3')
-                if os.path.exists(possible_path):
-                    downloaded_path = possible_path
+            downloaded_path = output_template.replace('%(ext)s', 'mp3')
 
             if downloaded_path and os.path.exists(downloaded_path):
                 self.write_mp3_metadata(downloaded_path, title, channel, video_url, video_info.get('id', ''))
@@ -345,7 +334,7 @@ class App(tk.Tk):
             self.after(0, lambda: messagebox.showinfo("Success", f"Downloaded and Synced: {title}"))
         except Exception as e:
             print(f"Error during MP3 download: {e}")
-            if hasattr(e, 'stderr'):
+            if isinstance(e, subprocess.CalledProcessError) and e.stderr:
                 print(f"STDERR: {e.stderr}")
             self.after(0, lambda: self.update_status(f"Error: {e}"))
             self.after(0, lambda: messagebox.showerror("Download Failed", f"Failed to download '{title}'.\n\nError: {e}"))
@@ -454,13 +443,16 @@ class App(tk.Tk):
             cmd = [
                 ytdlp_exe,
                 '--progress', # Request progress output
-                '-f', 'bestvideo[ext=webm]+bestaudio[ext=webm]/best[ext=webm]',
+                '-f', 'bv*+ba/b',
+                '--recode-video', 'webm',
                 '-o', output_template,
                 video_url
             ]
             
             print(f"Running command: {' '.join(cmd)}")
             process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, creationflags=subprocess.CREATE_NO_WINDOW)
+            assert process.stdout is not None
+            assert process.stderr is not None
 
             self.progress_bar['value'] = 0
             self.progress_bar['maximum'] = 100
@@ -489,10 +481,13 @@ class App(tk.Tk):
             print(f"Download completed for: {title}")
             self.after(0, lambda: self.update_status("Download complete"))
             self.after(0, self.update_progress, 100)
+            downloaded_path = output_template.replace('%(ext)s', 'webm')
+            if not os.path.exists(downloaded_path):
+                downloaded_path = ""
             self.after(0, lambda: messagebox.showinfo("Success", f"Downloaded: {title}"))
         except Exception as e:
             print(f"Error during WebM download: {e}")
-            if hasattr(e, 'stderr'):
+            if isinstance(e, subprocess.CalledProcessError) and e.stderr:
                 print(f"STDERR: {e.stderr}")
             self.after(0, lambda: self.update_status(f"Error: {e}"))
             self.after(0, lambda: messagebox.showerror("Download Failed", f"Failed to download '{title}'.\n\nError: {e}"))
