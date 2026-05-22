@@ -7,6 +7,8 @@ import threading
 import subprocess
 from turtle import title
 import urllib.request
+import unicodedata
+from urllib.parse import parse_qs, urlparse
 from PIL import Image, ImageTk
 import io
 import functools
@@ -77,6 +79,11 @@ class App(tk.Tk):
         self.results_tree.column("Title", width=550)
         self.results_tree.column("Channel", width=250)
         self.results_tree.pack(fill=tk.BOTH, expand=True)
+        self.results_tree.bind('<<TreeviewSelect>>', self.on_result_select)
+
+        self.thumbnail_photo = None
+        self.thumbnail_label = tk.Label(results_frame, text="Select a result to preview its thumbnail", bg="#3e3e3e", fg="white", padx=10, pady=8)
+        self.thumbnail_label.pack(fill=tk.X, padx=5, pady=(0, 5))
 
         # --- Download Section ---
         download_frame = ttk.LabelFrame(self.main_frame, text="Download Options")
@@ -112,6 +119,17 @@ class App(tk.Tk):
         master_lib_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
         master_lib_button = ttk.Button(master_lib_frame, text="Set...", command=self.set_master_library)
         master_lib_button.pack(side=tk.RIGHT)
+
+        webm_lib_frame = ttk.Frame(sync_frame)
+        webm_lib_frame.pack(fill=tk.X, padx=5, pady=5)
+        webm_lib_label = ttk.Label(webm_lib_frame, text="WebM Folder:")
+        webm_lib_label.pack(side=tk.LEFT)
+        self.webm_lib_path = tk.StringVar(value="Not Set")
+        webm_lib_entry = ttk.Entry(webm_lib_frame, textvariable=self.webm_lib_path, state="readonly")
+        webm_lib_entry.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=5)
+        webm_lib_button = ttk.Button(webm_lib_frame, text="Set...", command=self.set_webm_library)
+        webm_lib_button.pack(side=tk.RIGHT)
+
         playlist_button = ttk.Button(sync_frame, text="Import JSON Playlist", command=self.load_json_playlist)
         playlist_button.pack(side=tk.LEFT, padx=5, pady=5)
 
@@ -133,23 +151,23 @@ class App(tk.Tk):
 
         # Sync Button
         sync_button = ttk.Button(sync_frame, text="Sync Library to Game Folders", command=self.sync_library)
-        sync_button.pack(pady=5)
+        sync_button.pack(in_=target_buttons_frame, side=tk.RIGHT)
 
         # --- Apply Theme & Load Config ---
         self.configure_dark_theme()
         self.load_config()
 
     def configure_dark_theme(self):
-        bg_color = '#2e2e2e'
-        fg_color = 'white'
-        field_bg = '#3e3e3e'
-        button_bg = '#4f4f4f'
-        active_button_bg = '#6f6f6f'
+        bg_color = '#23262b'
+        fg_color = '#f2f4f8'
+        field_bg = '#31353c'
+        button_bg = '#5b6470'
+        active_button_bg = '#7a8696'
 
         self.style.configure('.', background=bg_color, foreground=fg_color)
-        self.style.configure('TButton', background=button_bg, foreground=fg_color, borderwidth=0)
+        self.style.configure('TButton', background=button_bg, foreground=fg_color, borderwidth=0, padding=6, relief='flat')
         self.style.map('TButton', background=[('active', active_button_bg)])
-        self.style.configure('TEntry', fieldbackground=field_bg, foreground=fg_color, borderwidth=1)
+        self.style.configure('TEntry', fieldbackground=field_bg, foreground=fg_color, borderwidth=1, relief='flat')
         self.style.configure('TLabel', background=bg_color, foreground=fg_color)
         self.style.configure('TLabelFrame', background=bg_color, foreground=fg_color)
         self.style.configure('TLabelFrame.Label', background=bg_color, foreground=fg_color)
@@ -198,6 +216,22 @@ class App(tk.Tk):
             raise
 
     def search_youtube(self, query, max_results=15):
+        if self.is_youtube_url(query):
+            return [self.fetch_video_info(query)]
+
+        candidates = [query]
+        normalized = self.normalize_vietnamese_query(query)
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+
+        for candidate in candidates:
+            results = self.search_youtube_raw(candidate, max_results=max_results)
+            if results:
+                return results
+
+        return []
+
+    def search_youtube_raw(self, query, max_results=15):
         ydl_opts: dict[str, object] = {
             'quiet': True,
             'skip_download': True,
@@ -208,28 +242,112 @@ class App(tk.Tk):
             data = ydl.extract_info(f'ytsearch{max_results}:{query}', download=False)
         return list(data.get('entries') or [])[:max_results]
 
+    def fetch_video_info(self, video_url):
+        ydl_opts: dict[str, object] = {
+            'quiet': True,
+            'skip_download': True,
+            'noplaylist': True,
+        }
+        with YoutubeDL(ydl_opts) as ydl:  # type: ignore[arg-type]
+            return ydl.extract_info(video_url, download=False)
+
+    def normalize_vietnamese_query(self, query):
+        normalized = unicodedata.normalize('NFKD', query)
+        stripped = ''.join(char for char in normalized if not unicodedata.combining(char))
+        stripped = stripped.replace('đ', 'd').replace('Đ', 'D')
+        return ' '.join(stripped.split())
+
+    def is_youtube_url(self, query):
+        parsed = urlparse(query.strip())
+        host = parsed.netloc.lower()
+        if parsed.scheme not in ('http', 'https'):
+            return False
+        return 'youtube.com' in host or 'youtu.be' in host
+
     def normalize_search_result(self, item):
         if isinstance(item, dict):
             video_id = item.get('id', '') or ''
             url = item.get('url', '') or item.get('webpage_url', '') or (f"https://www.youtube.com/watch?v={video_id}" if video_id else '')
             channel = item.get('channel') or item.get('uploader') or item.get('uploader_id') or 'No Channel'
             title = item.get('title', 'No Title')
+            thumbnail_url = self.extract_thumbnail_url(item)
         else:
             video_id = getattr(item, 'video_id', '') or getattr(item, 'id', '') or ''
             url = getattr(item, 'watch_url', '') or getattr(item, 'webpage_url', '') or (f"https://www.youtube.com/watch?v={video_id}" if video_id else '')
             channel = getattr(item, 'author', None) or getattr(item, 'channel', None) or getattr(item, 'uploader', None) or 'No Channel'
             title = getattr(item, 'title', 'No Title')
+            thumbnail_url = None
         return {
             'id': video_id,
             'url': url,
             'title': title,
             'channel': channel or 'No Channel',
+            'thumbnail_url': thumbnail_url,
         }
+
+    def extract_thumbnail_url(self, item):
+        thumbnail = item.get('thumbnail')
+        if isinstance(thumbnail, str) and thumbnail:
+            return thumbnail
+
+        thumbnails = item.get('thumbnails') or []
+        if thumbnails:
+            for candidate in reversed(thumbnails):
+                url = candidate.get('url') if isinstance(candidate, dict) else None
+                if url:
+                    return url
+
+        video_id = item.get('id', '') or ''
+        if video_id:
+            return f'https://i.ytimg.com/vi/{video_id}/hqdefault.jpg'
+
+        return None
 
     def add_search_result(self, item):
         title = item.get('title', 'No Title')
         channel = item.get('channel', 'No Channel')
         self.results_tree.insert('', tk.END, values=(title, channel))
+
+    def on_result_select(self, event=None):
+        selected = self.results_tree.selection()
+        if not selected:
+            return
+
+        index = self.results_tree.index(selected[0])
+        if index >= len(self.current_results):
+            return
+
+        self.update_thumbnail_preview(self.current_results[index])
+
+    def update_thumbnail_preview(self, item):
+        thumbnail_bytes = None
+        thumbnail_url = item.get('thumbnail_url') if isinstance(item, dict) else None
+
+        if thumbnail_url:
+            try:
+                request = urllib.request.Request(thumbnail_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(request, timeout=10) as response:
+                    thumbnail_bytes = response.read()
+            except Exception:
+                thumbnail_bytes = None
+
+        if not thumbnail_bytes:
+            video_id = item.get('id', '') if isinstance(item, dict) else ''
+            thumbnail_bytes = self.fetch_thumbnail_bytes(video_id)
+
+        if not thumbnail_bytes:
+            self.thumbnail_label.configure(image='', text='Thumbnail unavailable')
+            self.thumbnail_photo = None
+            return
+
+        try:
+            image = Image.open(io.BytesIO(thumbnail_bytes))
+            image.thumbnail((240, 135))
+            self.thumbnail_photo = ImageTk.PhotoImage(image)
+            self.thumbnail_label.configure(image=self.thumbnail_photo, text='')
+        except Exception:
+            self.thumbnail_label.configure(image='', text='Thumbnail unavailable')
+            self.thumbnail_photo = None
 
     def update_status(self, message):
         self.status_label.config(text=message)
@@ -421,6 +539,10 @@ class App(tk.Tk):
         if not self.master_lib_path.get() or self.master_lib_path.get() == "Not Set":
             messagebox.showwarning("No Library Set", "Please set a Master Music Library folder first.")
             return
+
+        if not self.webm_lib_path.get() or self.webm_lib_path.get() == "Not Set":
+            messagebox.showwarning("No WebM Folder Set", "Please set a WebM output folder first.")
+            return
         
         print(f"Starting WebM download for: {title} (ID: {video_id})")
         self.update_status(f"Downloading: {title}")
@@ -431,7 +553,7 @@ class App(tk.Tk):
     @log_to_terminal
     def perform_download_webm(self, video_url, title):
         try:
-            output_dir = self.master_lib_path.get()
+            output_dir = os.path.abspath(self.webm_lib_path.get())
             safe_title = "".join([c for c in title if c.isalpha() or c.isdigit() or c in (' ', '-')]).rstrip()
             output_template = os.path.join(output_dir, f"{safe_title}.%(ext)s")
             
@@ -493,13 +615,20 @@ class App(tk.Tk):
             self.after(0, lambda: messagebox.showerror("Download Failed", f"Failed to download '{title}'.\n\nError: {e}"))
             self.after(0, self.update_progress, 0)
 
-
     @log_to_terminal
     def set_master_library(self):
         folder = filedialog.askdirectory(title="Select Master Music Library Folder")
         if folder:
             self.master_lib_path.set(folder)
             print(f"Master library set to: {folder}")
+            self.save_config()
+
+    @log_to_terminal
+    def set_webm_library(self):
+        folder = filedialog.askdirectory(title="Select WebM Output Folder")
+        if folder:
+            self.webm_lib_path.set(folder)
+            print(f"WebM folder set to: {folder}")
             self.save_config()
 
     @log_to_terminal
@@ -526,7 +655,7 @@ class App(tk.Tk):
             return
         
         if not self.target_listbox.size():
-            messagebox.showwarning("No Targets", "Please add at least one target folder.")
+            messagebox.showinfo("No Sync Targets", "No game folders selected. The installer will continue using the Master Library only.")
             return
         
         print("Starting library sync...")
@@ -539,8 +668,8 @@ class App(tk.Tk):
             master = self.master_lib_path.get()
             targets = self.target_listbox.get(0, tk.END)
             
-            if master == "Not Set" or not targets:
-                messagebox.showwarning("Missing Paths", "Set Master Library and Game Folders first.")
+            if not targets:
+                self.after(0, lambda: self.update_status("No sync targets selected"))
                 return
 
             # Counter Logic
@@ -671,6 +800,8 @@ class App(tk.Tk):
                     config = json.load(f)
                     if config.get('master_library'):
                         self.master_lib_path.set(config['master_library'])
+                    if config.get('webm_library'):
+                        self.webm_lib_path.set(config['webm_library'])
                     if config.get('target_folders'):
                         for folder in config['target_folders']:
                             self.target_listbox.insert(tk.END, folder)
@@ -681,6 +812,7 @@ class App(tk.Tk):
     def save_config(self):
         config = {
             'master_library': self.master_lib_path.get() if self.master_lib_path.get() != "Not Set" else "",
+            'webm_library': self.webm_lib_path.get() if self.webm_lib_path.get() != "Not Set" else "",
             'target_folders': list(self.target_listbox.get(0, tk.END))
         }
         try:
