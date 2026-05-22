@@ -17,7 +17,7 @@ if not exist "ffmpeg.exe" (
 )
 
 echo Stage 3: Installing Python build dependencies...
-pip install --upgrade pyinstaller pytube youtube-search-python mutagen Pillow yt-dlp
+pip install --upgrade -r requirements.txt
 
 echo Stage 4: Building Independent EXE...
 :: --uac-admin is REQUIRED for the symbolic link (sync) feature to work
