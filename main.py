@@ -10,7 +10,7 @@ import urllib.request
 from PIL import Image, ImageTk
 import io
 import functools
-from pytube import Search
+from yt_dlp import YoutubeDL
 from mutagen.mp3 import MP3
 from mutagen.easyid3 import EasyID3
 from mutagen.id3 import ID3
@@ -183,8 +183,7 @@ class App(tk.Tk):
     def perform_search(self, query):
         try:
             print(f"Performing YouTube search for: {query}")
-            search = Search(query)
-            results = list(getattr(search, 'results', []) or [])[:15]
+            results = self.search_youtube(query, max_results=15)
             
             print(f"Found {len(results)} results")
             self.current_results = [self.normalize_search_result(item) for item in results]
@@ -198,14 +197,32 @@ class App(tk.Tk):
             self.after(0, lambda: self.update_status("Search failed"))
             raise
 
+    def search_youtube(self, query, max_results=15):
+        ydl_opts = {
+            'quiet': True,
+            'skip_download': True,
+            'noplaylist': True,
+            'extract_flat': True,
+        }
+        with YoutubeDL(ydl_opts) as ydl:
+            data = ydl.extract_info(f'ytsearch{max_results}:{query}', download=False)
+        return list(data.get('entries') or [])[:max_results]
+
     def normalize_search_result(self, item):
-        video_id = getattr(item, 'video_id', '') or ''
-        url = getattr(item, 'watch_url', '') or (f"https://www.youtube.com/watch?v={video_id}" if video_id else '')
-        channel = getattr(item, 'author', 'No Channel') or 'No Channel'
+        if isinstance(item, dict):
+            video_id = item.get('id', '') or ''
+            url = item.get('url', '') or item.get('webpage_url', '') or (f"https://www.youtube.com/watch?v={video_id}" if video_id else '')
+            channel = item.get('channel') or item.get('uploader') or item.get('uploader_id') or 'No Channel'
+            title = item.get('title', 'No Title')
+        else:
+            video_id = getattr(item, 'video_id', '') or getattr(item, 'id', '') or ''
+            url = getattr(item, 'watch_url', '') or getattr(item, 'webpage_url', '') or (f"https://www.youtube.com/watch?v={video_id}" if video_id else '')
+            channel = getattr(item, 'author', None) or getattr(item, 'channel', None) or getattr(item, 'uploader', None) or 'No Channel'
+            title = getattr(item, 'title', 'No Title')
         return {
             'id': video_id,
             'url': url,
-            'title': getattr(item, 'title', 'No Title'),
+            'title': title,
             'channel': channel or 'No Channel',
         }
 
@@ -608,12 +625,12 @@ class App(tk.Tk):
             
             try:
                 # 1. Search for the best match
-                search = Search(query)
-                if not search.results:
+                results = self.search_youtube(query, max_results=1)
+                if not results:
                     print(f"No results for {query}, skipping.")
                     continue
                 
-                best_match = search.results[0]
+                best_match = results[0]
                 video_info = self.normalize_search_result(best_match)
                 
                 # 2. Perform the download (Synchronously within this thread)
